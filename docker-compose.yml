@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  rover-ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: autonomous-rover:ros2-humble
+    container_name: rover-development
+    
+    # Hardware access
+    privileged: true
+    
+    # Network configuration
+    network_mode: host
+    
+    # Environment variables
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - XDG_RUNTIME_DIR=/tmp/runtime-ubuntu
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedx_cpp
+      # Enable indoor testing mode
+      - ROVER_INDOOR_TEST=false
+      
+    # Volume mounts
+    volumes:
+      # X11 display forwarding
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Development workspace (for live editing)
+      - ./src:/home/ubuntu/ros2_ws/src:rw
+      # Configuration persistence
+      - rover_config:/home/ubuntu/.config
+      # Logs persistence
+      - rover_logs:/home/ubuntu/ros2_ws/log
+      
+    # Device access for sensors
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0  # GPS module
+      - /dev/ttyUSB1:/dev/ttyUSB1  # IMU module
+      - /dev/ttyUSB2:/dev/ttyUSB2  # LiDAR scanner
+      - /dev/video0:/dev/video0    # USB camera
+      # Add more USB devices as needed
+      
+    # Interactive terminal
+    stdin_open: true
+    tty: true
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "ros2", "node", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      
+    # Restart policy
+    restart: unless-stopped
+    
+    # Resource limits (adjust based on your hardware)
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+
+  # Optional: Development tools container
+  rover-dev-tools:
+    image: autonomous-rover:ros2-humble
+    container_name: rover-dev-tools
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=42
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./:/workspace:rw
+    working_dir: /workspace
+    command: /bin/bash -c "
+      while true; do
+        echo 'Development tools container ready...';
+        echo 'Available commands:';
+        echo '  - ros2 topic list';
+        echo '  - ros2 node list';
+        echo '  - rviz2';
+        echo '  - rqt';
+        sleep 30;
+      done"
+    depends_on:
+      - rover-ros2
+    profiles:
+      - dev-tools
+
+  # Optional: RVIZ2 visualization
+  rover-rviz:
+    image: autonomous-rover:ros2-humble
+    container_name: rover-rviz
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - ROS_DOMAIN_ID=42
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./config/rviz:/home/ubuntu/.rviz2:rw
+    command: rviz2
+    depends_on:
+      - rover-ros2
+    profiles:
+      - visualization
+
+# Named volumes for data persistence
+volumes:
+  rover_config:
+    driver: local
+  rover_logs:
+    driver: local
+
+# Networks (using host network for ROS2 communication)
+networks:
+  default:
+    driver: bridge
+
+# Example usage commands:
+# 
+# Build and start main development container:
+#   docker-compose up -d rover-ros2
+#
+# Start with development tools:
+#   docker-compose --profile dev-tools up -d
+#
+# Start with visualization:
+#   docker-compose --profile visualization up -d
+#
+# Interactive shell in main container:
+#   docker-compose exec rover-ros2 /bin/bash
+#
+# View logs:
+#   docker-compose logs -f rover-ros2
+#
+# Rebuild after changes:
+#   docker-compose build --no-cache rover-ros2
+#
+# Clean shutdown:
+#   docker-compose down
+#
+# Clean shutdown with volumes:
+#   docker-compose down -v
