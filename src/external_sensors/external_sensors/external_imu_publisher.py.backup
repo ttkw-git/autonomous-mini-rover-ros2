@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""
+External 10-Axis IMU Publisher Node
+Publishes all 10-axis IMU data: 3-axis accel, 3-axis gyro, 3-axis mag, barometer
+Handles WIT protocol (0x55 headers) used by your IMU module
+"""
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Imu, MagneticField, Temperature, FluidPressure
+from geometry_msgs.msg import Vector3Stamped
+import serial
+import threading
+import time
+import struct
+import math
+import numpy as np
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class IMUData:
+    # 3-axis accelerometer (m/s²)
+    accel_x: Optional[float] = None
+    accel_y: Optional[float] = None
+    accel_z: Optional[float] = None
+    
+    # 3-axis gyroscope (rad/s)
+    gyro_x: Optional[float] = None
+    gyro_y: Optional[float] = None
+    gyro_z: Optional[float] = None
+    
+    # 3-axis magnetometer (µT)
+    mag_x: Optional[float] = None
+    mag_y: Optional[float] = None
+    mag_z: Optional[float] = None
+    
+    # Orientation angles (degrees)
+    roll: Optional[float] = None
+    pitch: Optional[float] = None
+    yaw: Optional[float] = None
+    
+    # Environmental sensors
+    temperature: Optional[float] = None
+    pressure: Optional[float] = None
+    
+    # Data quality
+    data_valid: bool = False
+
+class WITProtocolParser:
+    """Parser for WIT IMU protocol (0x55 header format)"""
+    
+    def __init__(self):
+        self.buffer = {}
+        self.key = 0
+        
+    def parse_packet(self, data: bytes) -> Optional[IMUData]:
+        """Parse WIT protocol packets"""
+        imu_data = IMUData()
+        
+        for byte in data:
+            self.buffer[self.key] = byte
+            self.key += 1
+            
+            # Check for WIT protocol header (0x55)
+            if self.buffer.get(0) != 0x55:
+                self.key = 0
+                continue
+            
+            # Need at least 11 bytes for a complete packet
+            if self.key < 11:
+                continue
+            
+            # Process complete packet
+            data_buff = list(self.buffer.values())
+            packet_type = self.buffer.get(1)
+            
+            # Validate checksum
+            if not self._check_sum(data_buff[0:10], data_buff[10]):
+                self.key = 0
+                continue
+            
+            # Parse different packet types
+            if packet_type == 0x51:  # Acceleration data
+                imu_data = self._parse_acceleration(data_buff, imu_data)
+            elif packet_type == 0x52:  # Angular velocity data
+                imu_data = self._parse_gyroscope(data_buff, imu_data)
+            elif packet_type == 0x53:  # Angle data
+                imu_data = self._parse_angles(data_buff, imu_data)
+            elif packet_type == 0x54:  # Magnetometer data
+                imu_data = self._parse_magnetometer(data_buff, imu_data)
+            elif packet_type == 0x56:  # Pressure and height data
+                imu_data = self._parse_pressure(data_buff, imu_data)
+            elif packet_type == 0x57:  # Longitude and latitude data (if available)
+                pass  # GPS data, handled by GPS publisher
+            elif packet_type == 0x58:  # Ground speed data
+                pass  # Speed data, handled by GPS publisher
+            
+            # Reset for next packet
+            self.buffer = {}
+            self.key = 0
+            
+            if imu_data.accel_x is not None or imu_data.gyro_x is not None:
+                imu_data.data_valid = True
+                return imu_data
+        
+        return None
+    
+    def _check_sum(self, data_list: list, check_data: int) -> bool:
+        """Validate packet checksum"""
+        return sum(data_list) & 0xff == check_data
+    
+    def _hex_to_short(self, raw_data: list) -> list:
+        """Convert hex data to signed short integers"""
+        return list(struct.unpack("hhhh", bytearray(raw_data)))
+    
+    def _parse_acceleration(self, data_buff: list, imu_data: IMUData) -> IMUData:
+        """Parse acceleration data (0x51)"""
+        try:
+            accel_raw = self._hex_to_short(data_buff[2:10])
+            # Scale factor: ±16g range
+            scale = 16.0 / 32768.0 * 9.8  # Convert to m/s²
+            
+            imu_data.accel_x = accel_raw[0] * scale
+            imu_data.accel_y = accel_raw[1] * scale
+            imu_data.accel_z = accel_raw[2] * scale
+            
+        except Exception as e:
+            pass
+        
+        return imu_data
+    
+    def _parse_gyroscope(self, data_buff: list, imu_data: IMUData) -> IMUData:
+        """Parse gyroscope data (0x52)"""
+        try:
+            gyro_raw = self._hex_to_short(data_buff[2:10])
+            # Scale factor: ±2000°/s range, convert to rad/s
+            scale = 2000.0 / 32768.0 * math.pi / 180.0
+            
+            imu_data.gyro_x = gyro_raw[0] * scale
+            imu_data.gyro_y = gyro_raw[1] * scale
+            imu_data.gyro_z = gyro_raw[2] * scale
+            
+        except Exception as e:
+            pass
+        
+        return imu_data
+    
+    def _parse_angles(self, data_buff: list, imu_data: IMUData) -> IMUData:
+        """Parse angle data (0x53)"""
+        try:
+            angle_raw = self._hex_to_short(data_buff[2:10])
+            # Scale factor: ±180° range
+            scale = 180.0 / 32768.0
+            
+            imu_data.roll = angle_raw[0] * scale
+            imu_data.pitch = angle_raw[1] * scale
+            imu_data.yaw = angle_raw[2] * scale
+            
+        except Exception as e:
+            pass
+        
+        return imu_data
+    
+    def _parse_magnetometer(self, data_buff: list, imu_data: IMUData) -> IMUData:
+        """Parse magnetometer data (0x54)"""
+        try:
+            mag_raw = self._hex_to_short(data_buff[2:10])
+            # Magnetometer values (no specific scale mentioned, using raw values)
+            
+            imu_data.mag_x = float(mag_raw[0])
+            imu_data.mag_y = float(mag_raw[1])
+            imu_data.mag_z = float(mag_raw[2])
+            
+        except Exception as e:
+            pass
+        
+        return imu_data
+    
+    def _parse_pressure(self, data_buff: list, imu_data: IMUData) -> IMUData:
+        """Parse pressure and temperature data (0x56)"""
+        try:
+            pressure_raw = self._hex_to_short(data_buff[2:10])
+            
+            # Pressure (Pascal) and height data
+            imu_data.pressure = float(pressure_raw[0])  # May need scaling
+            # Temperature data might be in pressure_raw[2] or separate packet
+            if len(pressure_raw) > 2:
+                imu_data.temperature = float(pressure_raw[2]) / 100.0  # Typical scaling
+            
+        except Exception as e:
+            pass
+        
+        return imu_data
+
+class ExternalIMUPublisher(Node):
+    def __init__(self):
+        super().__init__('external_imu_publisher')
+        
+        # Declare parameters
+        self.declare_parameter('device_port', '/dev/imu_usb')
+        self.declare_parameter('baud_rate', 9600)
+        self.declare_parameter('frame_id', 'external_imu_link')
+        self.declare_parameter('publish_rate', 50.0)
+        self.declare_parameter('topic_name', '/external_imu/data')
+        
+        # Get parameters
+        self.device_port = self.get_parameter('device_port').value
+        self.baud_rate = self.get_parameter('baud_rate').value
+        self.frame_id = self.get_parameter('frame_id').value
+        self.publish_rate = self.get_parameter('publish_rate').value
+        self.topic_name = self.get_parameter('topic_name').value
+        
+        # Publishers for all 10-axis data
+        self.imu_publisher = self.create_publisher(
+            Imu, 
+            self.topic_name, 
+            10
+        )
+        
+        self.mag_publisher = self.create_publisher(
+            MagneticField,
+            f"{self.topic_name.replace('/data', '/mag')}",
+            10
+        )
+        
+        self.pressure_publisher = self.create_publisher(
+            FluidPressure,
+            f"{self.topic_name.replace('/data', '/pressure')}",
+            10
+        )
+        
+        self.temp_publisher = self.create_publisher(
+            Temperature,
+            f"{self.topic_name.replace('/data', '/temperature')}",
+            10
+        )
+        
+        self.rpy_publisher = self.create_publisher(
+            Vector3Stamped,
+            f"{self.topic_name.replace('/data', '/rpy')}",
+            10
+        )
+        
+        # IMU data storage
+        self.current_imu_data = IMUData()
+        self.data_lock = threading.Lock()
+        
+        # Protocol parser
+        self.wit_parser = WITProtocolParser()
+        
+        # Serial connection
+        self.serial_connection = None
+        self.running = False
+        
+        # Statistics
+        self.packet_count = 0
+        self.valid_data_count = 0
+        
+        # Start IMU reading thread
+        self.start_imu_thread()
+        
+        # Publisher timer
+        self.timer = self.create_timer(
+            1.0 / self.publish_rate, 
+            self.publish_imu_data
+        )
+        
+        # Status timer
+        self.status_timer = self.create_timer(5.0, self.log_status)
+        
+        self.get_logger().info(f'External 10-Axis IMU Publisher started on {self.topic_name}')
+        self.get_logger().info(f'IMU device: {self.device_port} at {self.baud_rate} baud')
+    
+    def start_imu_thread(self):
+        """Start IMU data reading thread"""
+        self.running = True
+        self.imu_thread = threading.Thread(target=self.imu_reader_thread)
+        self.imu_thread.daemon = True
+        self.imu_thread.start()
+    
+    def imu_reader_thread(self):
+        """IMU data reading thread"""
+        retry_count = 0
+        
+        while self.running:
+            try:
+                if self.serial_connection is None:
+                    self.get_logger().info(f'Connecting to IMU at {self.device_port}')
+                    self.serial_connection = serial.Serial(
+                        self.device_port, 
+                        self.baud_rate, 
+                        timeout=1
+                    )
+                    
+                    # Send IMU configuration commands
+                    self.configure_imu()
+                    retry_count = 0
+                
+                if self.serial_connection and self.serial_connection.in_waiting > 0:
+                    chunk = self.serial_connection.read(self.serial_connection.in_waiting)
+                    self.packet_count += len(chunk)
+                    
+                    # Parse WIT protocol packets
+                    imu_data = self.wit_parser.parse_packet(chunk)
+                    
+                    if imu_data and imu_data.data_valid:
+                        with self.data_lock:
+                            # Merge new data with existing data
+                            if imu_data.accel_x is not None:
+                                self.current_imu_data.accel_x = imu_data.accel_x
+                                self.current_imu_data.accel_y = imu_data.accel_y
+                                self.current_imu_data.accel_z = imu_data.accel_z
+                            
+                            if imu_data.gyro_x is not None:
+                                self.current_imu_data.gyro_x = imu_data.gyro_x
+                                self.current_imu_data.gyro_y = imu_data.gyro_y
+                                self.current_imu_data.gyro_z = imu_data.gyro_z
+                            
+                            if imu_data.mag_x is not None:
+                                self.current_imu_data.mag_x = imu_data.mag_x
+                                self.current_imu_data.mag_y = imu_data.mag_y
+                                self.current_imu_data.mag_z = imu_data.mag_z
+                            
+                            if imu_data.roll is not None:
+                                self.current_imu_data.roll = imu_data.roll
+                                self.current_imu_data.pitch = imu_data.pitch
+                                self.current_imu_data.yaw = imu_data.yaw
+                            
+                            if imu_data.pressure is not None:
+                                self.current_imu_data.pressure = imu_data.pressure
+                            
+                            if imu_data.temperature is not None:
+                                self.current_imu_data.temperature = imu_data.temperature
+                        
+                        self.valid_data_count += 1
+                
+                time.sleep(0.001)  # Very small delay for high-frequency IMU data
+                
+            except Exception as e:
+                retry_count += 1
+                self.get_logger().warning(f'IMU connection error (attempt {retry_count}): {e}')
+                if self.serial_connection:
+                    self.serial_connection.close()
+                    self.serial_connection = None
+                
+                # Exponential backoff for retries
+                time.sleep(min(retry_count * 0.5, 3.0))
+    
+    def configure_imu(self):
+        """Send configuration commands to IMU"""
+        if not self.serial_connection:
+            return
+        
+        try:
+            # WIT IMU configuration commands
+            commands = [
+                b"\xFF\xAA\x69\x88\xB5",  # Unlock configuration
+                b"\xFF\xAA\x02\x00\x00",  # Set output rate to 200Hz
+                b"\xFF\xAA\x03\x03\x00",  # Enable acceleration + gyro + angle output
+                b"\xFF\xAA\x05\x00\x00",  # Set to continuous output mode
+                b"\xFF\xAA\x00\x00\x00",  # Save configuration
+            ]
+            
+            for cmd in commands:
+                self.serial_connection.write(cmd)
+                time.sleep(0.1)
+                
+            self.get_logger().info('IMU configuration commands sent')
+            
+        except Exception as e:
+            self.get_logger().warning(f'IMU configuration failed: {e}')
+    
+    def euler_to_quaternion(self, roll: float, pitch: float, yaw: float) -> list:
+        """Convert Euler angles to quaternion"""
+        # Convert degrees to radians
+        roll_rad = math.radians(roll)
+        pitch_rad = math.radians(pitch)
+        yaw_rad = math.radians(yaw)
+        
+        # Calculate quaternion components
+        qx = np.sin(roll_rad/2) * np.cos(pitch_rad/2) * np.cos(yaw_rad/2) - np.cos(roll_rad/2) * np.sin(pitch_rad/2) * np.sin(yaw_rad/2)
+        qy = np.cos(roll_rad/2) * np.sin(pitch_rad/2) * np.cos(yaw_rad/2) + np.sin(roll_rad/2) * np.cos(pitch_rad/2) * np.sin(yaw_rad/2)
+        qz = np.cos(roll_rad/2) * np.cos(pitch_rad/2) * np.sin(yaw_rad/2) - np.sin(roll_rad/2) * np.sin(pitch_rad/2) * np.cos(yaw_rad/2)
+        qw = np.cos(roll_rad/2) * np.cos(pitch_rad/2) * np.cos(yaw_rad/2) + np.sin(roll_rad/2) * np.sin(pitch_rad/2) * np.sin(yaw_rad/2)
+        
+        return [qx, qy, qz, qw]
+    
+    def publish_imu_data(self):
+        """Publish all 10-axis IMU data to ROS topics"""
+        with self.data_lock:
+            if self.current_imu_data.accel_x is None and self.current_imu_data.gyro_x is None:
+                return
+            
+            current_time = self.get_clock().now().to_msg()
+            
+            # 1. Publish main IMU message (accel + gyro + orientation)
+            imu_msg = Imu()
+            imu_msg.header.stamp = current_time
+            imu_msg.header.frame_id = self.frame_id
+            
+            # Linear acceleration (3-axis)
+            imu_msg.linear_acceleration.x = self.current_imu_data.accel_x or 0.0
+            imu_msg.linear_acceleration.y = self.current_imu_data.accel_y or 0.0
+            imu_msg.linear_acceleration.z = self.current_imu_data.accel_z or 0.0
+            
+            # Angular velocity (3-axis)
+            imu_msg.angular_velocity.x = self.current_imu_data.gyro_x or 0.0
+            imu_msg.angular_velocity.y = self.current_imu_data.gyro_y or 0.0
+            imu_msg.angular_velocity.z = self.current_imu_data.gyro_z or 0.0
+            
+            # Orientation from Euler angles
+            if (self.current_imu_data.roll is not None and 
+                self.current_imu_data.pitch is not None and 
+                self.current_imu_data.yaw is not None):
+                
+                quat = self.euler_to_quaternion(
+                    self.current_imu_data.roll,
+                    self.current_imu_data.pitch, 
+                    self.current_imu_data.yaw
+                )
+                imu_msg.orientation.x = quat[0]
+                imu_msg.orientation.y = quat[1]
+                imu_msg.orientation.z = quat[2]
+                imu_msg.orientation.w = quat[3]
+                
+                # Set orientation covariance (known orientation)
+                imu_msg.orientation_covariance[0] = 0.01
+                imu_msg.orientation_covariance[4] = 0.01
+                imu_msg.orientation_covariance[8] = 0.01
+            else:
+                # Unknown orientation
+                imu_msg.orientation_covariance[0] = -1
+            
+            # Set covariances for accel and gyro
+            imu_msg.linear_acceleration_covariance[0] = 0.01
+            imu_msg.linear_acceleration_covariance[4] = 0.01
+            imu_msg.linear_acceleration_covariance[8] = 0.01
+            
+            imu_msg.angular_velocity_covariance[0] = 0.001
+            imu_msg.angular_velocity_covariance[4] = 0.001
+            imu_msg.angular_velocity_covariance[8] = 0.001
+            
+            self.imu_publisher.publish(imu_msg)
+            
+            # 2. Publish magnetometer data (3-axis)
+            if self.current_imu_data.mag_x is not None:
+                mag_msg = MagneticField()
+                mag_msg.header.stamp = current_time
+                mag_msg.header.frame_id = self.frame_id
+                
+                mag_msg.magnetic_field.x = self.current_imu_data.mag_x
+                mag_msg.magnetic_field.y = self.current_imu_data.mag_y or 0.0
+                mag_msg.magnetic_field.z = self.current_imu_data.mag_z or 0.0
+                
+                # Set covariance
+                mag_msg.magnetic_field_covariance[0] = 0.01
+                mag_msg.magnetic_field_covariance[4] = 0.01
+                mag_msg.magnetic_field_covariance[8] = 0.01
+                
+                self.mag_publisher.publish(mag_msg)
+            
+            # 3. Publish barometric pressure (1-axis)
+            if self.current_imu_data.pressure is not None:
+                pressure_msg = FluidPressure()
+                pressure_msg.header.stamp = current_time
+                pressure_msg.header.frame_id = self.frame_id
+                pressure_msg.fluid_pressure = self.current_imu_data.pressure
+                pressure_msg.variance = 100.0
+                
+                self.pressure_publisher.publish(pressure_msg)
+            
+            # 4. Publish temperature
+            if self.current_imu_data.temperature is not None:
+                temp_msg = Temperature()
+                temp_msg.header.stamp = current_time
+                temp_msg.header.frame_id = self.frame_id
+                temp_msg.temperature = self.current_imu_data.temperature
+                temp_msg.variance = 1.0
+                
+                self.temp_publisher.publish(temp_msg)
+            
+            # 5. Publish Roll/Pitch/Yaw angles
+            if (self.current_imu_data.roll is not None and 
+                self.current_imu_data.pitch is not None and 
+                self.current_imu_data.yaw is not None):
+                
+                rpy_msg = Vector3Stamped()
+                rpy_msg.header.stamp = current_time
+                rpy_msg.header.frame_id = self.frame_id
+                rpy_msg.vector.x = self.current_imu_data.roll
+                rpy_msg.vector.y = self.current_imu_data.pitch
+                rpy_msg.vector.z = self.current_imu_data.yaw
+                
+                self.rpy_publisher.publish(rpy_msg)
+    
+    def log_status(self):
+        """Log IMU status periodically"""
+        with self.data_lock:
+            accel_mag = 0.0
+            if (self.current_imu_data.accel_x is not None and 
+                self.current_imu_data.accel_y is not None and 
+                self.current_imu_data.accel_z is not None):
+                accel_mag = math.sqrt(
+                    self.current_imu_data.accel_x**2 + 
+                    self.current_imu_data.accel_y**2 + 
+                    self.current_imu_data.accel_z**2
+                )
+            
+            self.get_logger().info(
+                f'IMU: Accel|{accel_mag:.2f}| Gyro|{self.current_imu_data.gyro_z or 0:.3f}| '
+                f'RPY|{self.current_imu_data.roll or 0:.1f},{self.current_imu_data.pitch or 0:.1f},{self.current_imu_data.yaw or 0:.1f}| '
+                f'Packets: {self.packet_count} | Valid: {self.valid_data_count}'
+            )
+    
+    def destroy_node(self):
+        """Clean shutdown"""
+        self.running = False
+        if self.serial_connection:
+            self.serial_connection.close()
+        super().destroy_node()
+
+def main(args=None):
+    rclpy.init(args=args)
+    
+    try:
+        imu_publisher = ExternalIMUPublisher()
+        rclpy.spin(imu_publisher)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if 'imu_publisher' in locals():
+            imu_publisher.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

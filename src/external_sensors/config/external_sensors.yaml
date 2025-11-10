@@ -1,0 +1,16 @@
+# External Sensors Configuration
+gps_publisher:
+  ros__parameters:
+    device_port: "/dev/gps_serial"
+    baud_rate: 9600
+    frame_id: "gps_link"
+    publish_rate: 10.0
+    topic_name: "/external_gps/fix"
+    
+external_imu_publisher:
+  ros__parameters:
+    device_port: "/dev/imu_usb"
+    baud_rate: 9600
+    frame_id: "external_imu_link"
+    publish_rate: 50.0
+    topic_name: "/external_imu/data"

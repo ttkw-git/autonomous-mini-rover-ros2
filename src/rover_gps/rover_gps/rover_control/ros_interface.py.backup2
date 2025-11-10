@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+ROS2 interface for rover control
+Handles ROS2 publishers, subscribers, Ackermann constraints, and LiDAR safety
+FIXED: Added thread safety and missing methods
+"""
+
+import time
+import threading
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import NavSatFix, Imu
+
+from ackermann_handler import AckermannMovementHandler
+from lidar_safety_monitor import LidarSafetyMonitor
+
+
+class RoverROSInterface(Node):
+    """ROS2 interface node for rover control with Ackermann constraints and LiDAR safety"""
+    
+    def __init__(self, enable_lidar_safety=True):
+        super().__init__('rover_gui_interface')
+        
+        # Thread safety
+        self._lock = threading.Lock()
+        self.shutdown_requested = False
+        
+        # Ackermann handler (always enabled)
+        self.ackermann = AckermannMovementHandler()
+        
+        # LiDAR safety monitor
+        self.enable_lidar_safety = enable_lidar_safety
+        if enable_lidar_safety:
+            self.lidar_safety = LidarSafetyMonitor(safety_distance=0.5, warning_distance=1.0)
+            self.get_logger().info('LiDAR safety monitoring ENABLED')
+        else:
+            self.lidar_safety = None
+            self.get_logger().info('LiDAR safety monitoring DISABLED')
+        
+        # GPS data storage
+        self.latest_gps_lat = 0.0
+        self.latest_gps_lon = 0.0
+        self.latest_gps_status = -1
+        self.gps_data_available = False
+        self._gps_lock = threading.Lock()
+        
+        # Publishers
+        self.cmd_vel_pub = self.create_publisher(Twist, '/controller/cmd_vel', 10)
+        self.get_logger().info('Created cmd_vel publisher on: /controller/cmd_vel')
+        
+        # GPS Subscribers - try multiple topics
+        self.gps_topics_to_try = ['/fix', '/gps/fix', '/nmea_fix', '/gps_fix']
+        self.gps_sub = None
+        self.current_gps_topic = None
+        self.setup_gps_subscription()
+        
+        # Safety timer
+        self.last_command_time = time.time()
+        self.safety_timer = self.create_timer(0.5, self.safety_check)
+        
+        # Mode
+        self.manual_mode = True
+        
+        self.get_logger().info('Rover ROS Interface initialized with Ackermann constraints')
+    
+    def setup_gps_subscription(self):
+        """Try to find and subscribe to available GPS topic"""
+        if self.shutdown_requested:
+            return
+        
+        try:
+            topic_list = self.get_topic_names_and_types()
+            available_topics = [topic_name for topic_name, _ in topic_list]
+            
+            self.get_logger().info(f'Searching for GPS topics in {len(available_topics)} topics')
+            
+            for topic in self.gps_topics_to_try:
+                if topic in available_topics:
+                    try:
+                        self.gps_sub = self.create_subscription(
+                            NavSatFix, topic, self.gps_callback, 10)
+                        self.current_gps_topic = topic
+                        self.get_logger().info(f'Subscribed to GPS topic: {topic}')
+                        return
+                    except Exception as e:
+                        self.get_logger().warn(f'Failed to subscribe to {topic}: {e}')
+            
+            # No GPS topic found - using Direct GPS instead
+            self.get_logger().info('No ROS GPS topic found. Using Direct GPS handler.')
+            
+        except Exception as e:
+            self.get_logger().error(f'GPS setup error: {e}')
+    
+    def gps_callback(self, msg):
+        """GPS callback with thread-safe data storage"""
+        if self.shutdown_requested:
+            return
+        
+        try:
+            with self._gps_lock:
+                if abs(msg.latitude) > 90 or abs(msg.longitude) > 180:
+                    return
+                
+                self.latest_gps_lat = msg.latitude
+                self.latest_gps_lon = msg.longitude
+                self.latest_gps_status = msg.status.status
+                self.gps_data_available = True
+                
+        except Exception as e:
+            self.get_logger().error(f'GPS callback error: {e}')
+    
+    def get_gps_data(self):
+        """Thread-safe GPS data retrieval"""
+        with self._gps_lock:
+            return {
+                'lat': self.latest_gps_lat,
+                'lon': self.latest_gps_lon,
+                'status': self.latest_gps_status,
+                'available': self.gps_data_available,
+                'topic': self.current_gps_topic
+            }
+    
+    def send_cmd_vel(self, linear, angular):
+        """Send velocity command with Ackermann constraints (thread-safe)"""
+        if self.shutdown_requested:
+            return
+        
+        with self._lock:
+            try:
+                # Apply Ackermann constraints
+                linear, angular = self.ackermann.calculate_safe_command(linear, angular, debug=False)
+                
+                # Check LiDAR safety if enabled
+                if self.enable_lidar_safety and self.lidar_safety:
+                    pass
+                    obstacle_info = self.lidar_safety.get_status()
+                    if obstacle_info['obstacle_detected'] and linear > 0:
+                        self.get_logger().warn(
+                               f'Obstacle at {obstacle_info["min_distance"]:.2f}m - blocking forward'
+                        )
+                        linear = 0.0
+                
+                msg = Twist()
+                msg.linear.x = float(linear)
+                msg.angular.z = float(angular)
+                self.cmd_vel_pub.publish(msg)
+                self.last_command_time = time.time()
+                
+            except Exception as e:
+                self.get_logger().error(f'Command send error: {e}')
+    
+    def safety_check(self):
+        """Safety check - stop if no commands received"""
+        if self.shutdown_requested:
+            return
+        
+        try:
+            if self.manual_mode:
+                if time.time() - self.last_command_time > 2.0:
+                    with self._lock:
+                        stop_msg = Twist()
+                        self.cmd_vel_pub.publish(stop_msg)
+        except Exception as e:
+            self.get_logger().error(f'Safety check error: {e}')
+    
+    def call_emergency_stop(self):
+        """Call emergency stop (thread-safe)"""
+        with self._lock:
+            try:
+                stop_msg = Twist()
+                self.cmd_vel_pub.publish(stop_msg)
+                self.get_logger().warn('Emergency stop command sent')
+            except Exception as e:
+                self.get_logger().error(f'Emergency stop error: {e}')
+    
+    def set_lidar_safety_distance(self, distance):
+        """Update LiDAR safety distance"""
+        if self.lidar_safety:
+            self.lidar_safety.set_safety_distance(distance)
+            self.get_logger().info(f'Safety distance updated to {distance:.2f}m')
+    
+    def get_lidar_safety_info(self):
+        """Get current LiDAR safety status"""
+        if self.lidar_safety:
+            status = self.lidar_safety.get_status()
+            return {
+                'detected': status['obstacle_detected'],
+                'distance': status['min_distance'],
+                'angle_deg': status['obstacle_angle'] * 180.0 / 3.14159,
+                'warning': status['min_distance'] < status['warning_distance']
+            }
+        else:
+            # Return safe defaults when LiDAR disabled
+            return {
+                'detected': False,
+                'distance': float('inf'),
+                'angle_deg': 0.0,
+                'warning': False
+            }
+    
+    def cleanup(self):
+        """Safe cleanup when shutting down"""
+        self.get_logger().info('Cleaning up RoverROSInterface...')
+        self.shutdown_requested = True
+        
+        with self._lock:
+            try:
+                # Send stop command
+                stop_msg = Twist()
+                self.cmd_vel_pub.publish(stop_msg)
+                
+                # Cancel timer
+                if hasattr(self, 'safety_timer'):
+                    self.safety_timer.cancel()
+                
+                # Small delay to let final message send
+                time.sleep(0.1)
+                
+                self.get_logger().info('Cleanup completed')
+            except Exception as e:
+                self.get_logger().error(f'Cleanup error: {e}')

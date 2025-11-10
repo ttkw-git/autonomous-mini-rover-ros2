@@ -1,0 +1,33 @@
+import os
+from glob import glob
+from setuptools import find_packages, setup
+
+package_name = 'rover_gps'
+
+setup(
+    name=package_name,
+    version='0.0.0',
+    packages=find_packages(exclude=['test']),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='ubuntu',
+    maintainer_email='ubuntu@todo.todo',
+    description='GPS package for rover',
+    license='TODO: License declaration',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+        'gps_navigation = rover_gps.gps_navigation:main',
+        'gps_nav_service = rover_gps.gps_nav_service:main',
+            'minimal_gps_controller = rover_gps.minimal_gps_controller:main',
+            'minimal_gps_cli = rover_gps.minimal_gps_cli:main',
+            'rover_control_gui = rover_gps.gui.rover_control_gui:main',
+        ],
+    },
+)
