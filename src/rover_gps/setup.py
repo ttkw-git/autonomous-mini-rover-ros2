@@ -27,7 +27,7 @@ setup(
         'gps_nav_service = rover_gps.gps_nav_service:main',
             'minimal_gps_controller = rover_gps.minimal_gps_controller:main',
             'minimal_gps_cli = rover_gps.minimal_gps_cli:main',
-            'rover_control_gui = rover_gps.gui.rover_control_gui:main',
+            'rover_control_gui = rover_gps.rover_control.main_guiv2:main',
         ],
     },
 )
