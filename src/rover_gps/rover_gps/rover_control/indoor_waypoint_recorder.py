@@ -14,6 +14,8 @@ import time
 import math
 from datetime import datetime
 
+from .path_utils import resolve_waypoint_path
+
 
 class IndoorWaypointRecorder(Node):
     """
@@ -193,6 +195,9 @@ class IndoorWaypointRecorder(Node):
         if filename is None:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'indoor_waypoints_{timestamp}.json'
+
+        output_path = resolve_waypoint_path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Calculate total path distance
         total_distance = 0.0
@@ -215,16 +220,16 @@ class IndoorWaypointRecorder(Node):
             'coordinate_system': 'relative_xy_meters'
         }
         
-        with open(filename, 'w') as f:
+        with open(output_path, 'w') as f:
             json.dump(data, f, indent=2)
-        
+
         self.get_logger().info('=' * 60)
-        self.get_logger().info(f'✓ SAVED: {filename}')
+        self.get_logger().info(f'✓ SAVED: {output_path}')
         self.get_logger().info(f'  Waypoints: {len(self.waypoints)}')
         self.get_logger().info(f'  Total distance: {total_distance:.2f}m')
         self.get_logger().info('=' * 60)
-        
-        return filename
+
+        return str(output_path)
     
     def get_current_status(self):
         """Get current recording status"""

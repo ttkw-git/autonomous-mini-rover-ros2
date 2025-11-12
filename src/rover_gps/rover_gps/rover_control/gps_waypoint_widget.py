@@ -17,6 +17,8 @@ os.environ['TZ'] = 'America/Winnipeg'
 import time
 time.tzset()
 
+from .path_utils import resolve_waypoint_path, waypoint_storage_dir
+
 class GPSWaypointWidget(QWidget):
     """GPS waypoint recording widget with indoor test mode support"""
     
@@ -285,7 +287,9 @@ class GPSWaypointWidget(QWidget):
         # Determine mode for filename
         mode_prefix = "indoor_" if (hasattr(self.parent_gui, 'indoor_test_mode') and self.parent_gui.indoor_test_mode) else ""
         filename = f'{mode_prefix}rover_waypoints_{timestamp}.json'
-        
+        output_dir = waypoint_storage_dir()
+        json_path = resolve_waypoint_path(filename)
+
         # Prepare data
         data = {
             'origin': {
@@ -300,25 +304,27 @@ class GPSWaypointWidget(QWidget):
         
         try:
             # Save JSON
-            with open(filename, 'w') as f:
+            with open(json_path, 'w') as f:
                 json.dump(data, f, indent=2)
-            
+
             # Also save CSV for easy viewing
             csv_filename = f'{mode_prefix}rover_waypoints_{timestamp}.csv'
-            with open(csv_filename, 'w', newline='') as f:
+            csv_path = resolve_waypoint_path(csv_filename)
+            with open(csv_path, 'w', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=[
-                    'id', 'datetime', 'latitude', 'longitude', 'x', 'y', 'gps_status'], 
+                    'id', 'datetime', 'latitude', 'longitude', 'x', 'y', 'gps_status'],
                     extrasaction='ignore')
                 writer.writeheader()
                 writer.writerows(self.waypoints)
-            
+
             QMessageBox.information(
-                self, "Saved", 
+                self, "Saved",
                 f"Saved {len(self.waypoints)} waypoints!\n\n"
-                f"Files:\n• {filename}\n• {csv_filename}"
+                f"Location: {output_dir}\n"
+                f"Files:\n• {json_path}\n• {csv_path}"
             )
-            print(f"Saved waypoints to {filename}")
-            
+            print(f"Saved waypoints to {json_path}")
+
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save: {e}")
     

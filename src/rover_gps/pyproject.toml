@@ -1,0 +1,16 @@
+[build-system]
+requires = [
+    "setuptools>=61",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "rover_gps/tests",
+]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["rover_gps"]

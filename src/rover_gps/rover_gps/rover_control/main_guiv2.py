@@ -10,20 +10,34 @@ import signal
 import atexit
 import subprocess
 import threading
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Import modular components
-from ackermann_handler import AckermannMovementHandler
-from gps_handler import DirectGPSHandler
-from safety_manager import SafetyManager
-from virtual_joystick import VirtualJoystick
-from ros_interface import RoverROSInterface
-from waypoint_navigator import WaypointNavigator, NavigationState
+from .ackermann_handler import AckermannMovementHandler
+from .gps_handler import DirectGPSHandler
+from .safety_manager import SafetyManager
+from .virtual_joystick import VirtualJoystick
+from .ros_interface import RoverROSInterface
+from .waypoint_navigator import NavigationState, WaypointNavigator
 
 # Import GPS waypoint widget if available
 try:
-    from gps_waypoint_widget import GPSWaypointWidget
+    from .gps_waypoint_widget import GPSWaypointWidget
     GPS_WIDGET_AVAILABLE = True
 except ImportError:
     print("GPS waypoint widget not available")

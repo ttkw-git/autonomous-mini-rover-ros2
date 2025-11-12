@@ -11,7 +11,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import NavSatFix, Imu, LaserScan
 
-from ackermann_handler import AckermannMovementHandler
+from .ackermann_handler import AckermannMovementHandler
 
 
 class RoverROSInterface(Node):

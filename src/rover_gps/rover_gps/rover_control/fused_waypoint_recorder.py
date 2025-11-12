@@ -9,6 +9,8 @@ import time
 from datetime import datetime
 from sensor_fusion import SensorFusion
 
+from .path_utils import resolve_waypoint_path
+
 
 class FusedWaypointRecorder:
     """Records waypoints using fused IMU+GPS data"""
@@ -107,7 +109,10 @@ class FusedWaypointRecorder:
         if filename is None:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'fused_waypoints_{timestamp}.json'
-        
+
+        output_path = resolve_waypoint_path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         # Calculate total distance
         total_distance = 0.0
         for i in range(1, len(self.waypoints)):
@@ -128,13 +133,13 @@ class FusedWaypointRecorder:
             'mode': 'fused_imu_gps'
         }
         
-        with open(filename, 'w') as f:
+        with open(output_path, 'w') as f:
             json.dump(data, f, indent=2)
-        
-        print(f"✓ Saved {len(self.waypoints)} waypoints to: {filename}")
+
+        print(f"✓ Saved {len(self.waypoints)} waypoints to: {output_path}")
         print(f"  Total distance: {total_distance:.2f}m")
-        
-        return filename
+
+        return str(output_path)
     
     def _gps_to_xy(self, lat, lon, origin_lat, origin_lon):
         """

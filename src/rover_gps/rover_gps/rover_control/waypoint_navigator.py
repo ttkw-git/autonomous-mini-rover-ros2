@@ -303,18 +303,22 @@ class WaypointNavigator:
         """Calculate total distance of waypoint path"""
         if len(self.waypoints) < 2:
             return 0.0
-        
+
         total = 0.0
         for i in range(1, len(self.waypoints)):
             lat1 = self.waypoints[i-1]['latitude']
             lon1 = self.waypoints[i-1]['longitude']
             lat2 = self.waypoints[i]['latitude']
             lon2 = self.waypoints[i]['longitude']
-            
+
             distance, _ = self._calculate_distance_and_bearing(lat1, lon1, lat2, lon2)
             total += distance
-        
+
         return total
+
+    def calculate_total_distance(self):
+        """Return the total path length for the currently loaded waypoints."""
+        return self._calculate_total_distance()
     
     def get_navigation_status(self):
         """
