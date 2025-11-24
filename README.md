@@ -5,7 +5,7 @@ combines low-level motor control, perception pipelines, navigation, and higher l
 behaviours into a single `colcon` workspace that can be built for the physical rover or for
 simulation.
 
-## 📋 Development Status
+## Development Status
 
 **Active Research Project** - This workspace is under continuous development as part of agricultural robotics research at University of Winnipeg. Updates are pushed periodically from containerized development environment as features are completed and tested.
 
