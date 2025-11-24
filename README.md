@@ -1,4 +1,4 @@
-# Autonomous Mini Rover ROS 2 Workspace (Active development - latest updates pushed periodically from containerized development environment)
+# Autonomous Mini Rover ROS 2 Workspace
 
 This repository contains the ROS 2 workspace that powers the autonomous mini rover platform. It
 combines low-level motor control, perception pipelines, navigation, and higher level application
@@ -103,3 +103,5 @@ Fix any reported linting issues before committing changes.
 Please also update package-specific documentation (launch instructions, parameter descriptions,
 hardware requirements) when you make relevant changes so that other rover developers can stay in
 sync.
+
+Active development - latest updates pushed periodically from containerized development environment
