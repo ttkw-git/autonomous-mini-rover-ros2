@@ -40,7 +40,7 @@ class AckermannChassis:
                     # msg = MotorsState()
                     # msg.data = data
                     # return None, msg
-                servo_angle = 1500 + 2000*math.degrees(-steering_angle)/180
+                servo_angle = 1500 + 2000*math.degrees(steering_angle)/180
    
 
             vr = linear_speed + angular_speed*self.track_width/2
